@@ -1,0 +1,67 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum Plan {
+  FREE
+  PREMIUM
+}
+
+model User {
+  id              String      @id @default(uuid())
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  name            String
+  email           String      @unique
+  username        String      @unique
+  description     String?
+  avatar          String?
+  socialLinks     Json
+  isProfilePublic Boolean     @default(true)
+  role            Role        @default(USER)
+  plan            Plan        @default(FREE)
+  followersCount  Int         @default(0)
+  stackItems      StackItem[]
+
+  Item Item[]
+}
+
+model Item {
+  id         String      @id @default(uuid())
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  title      String
+  link       String
+  image      String?
+  category   String?
+  ownerId    String?     
+  owner      User?       @relation(fields: [ownerId], references: [id])
+  stackItems StackItem[]
+}
+
+model StackItem {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  item      Item     @relation(fields: [itemId], references: [id])
+  itemId    String
+  title     String
+  link      String
+  image     String?
+  category  String?
+  position  Int
+  @@unique([userId, itemId])
+}
