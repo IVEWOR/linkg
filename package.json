@@ -12,6 +12,7 @@
     "@prisma/client": "^6.13.0",
     "@supabase/ssr": "^0.6.1",
     "@supabase/supabase-js": "^2.54.0",
+    "lucide-react": "^0.539.0",
     "next": "15.4.5",
     "react": "19.1.0",
     "react-dom": "19.1.0"

@@ -1,20 +1,31 @@
 import { NextResponse } from "next/server";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { prisma } from "@/lib/prisma";
 
 export async function GET(request) {
-  const { searchParams, origin } = new URL(request.url);
-  const code = searchParams.get("code");
-  const next = searchParams.get("next") ?? "/dashboard";
+  const supabase = await getSupabaseServerClient();
+  const url = new URL(request.url);
+  const code = url.searchParams.get("code");
+  const origin = url.origin;
 
   if (code) {
-    const supabase = await getSupabaseServerClient();
     const { error } = await supabase.auth.exchangeCodeForSession(code);
-    if (error) {
+    if (error)
       return NextResponse.redirect(
         `${origin}/login?error=${encodeURIComponent(error.message)}`
       );
-    }
   }
 
-  return NextResponse.redirect(`${origin}${next}`);
+  // find db user & send to /{username}
+  const { data } = await supabase.auth.getUser();
+  const authUser = data?.user;
+  if (!authUser)
+    return NextResponse.redirect(`${origin}/login?error=session-missing`);
+
+  const dbUser = await prisma.user.findUnique({
+    where: { id: authUser.id },
+    select: { username: true },
+  });
+  const to = dbUser?.username ? `/${dbUser.username}` : "/profiles";
+  return NextResponse.redirect(`${origin}${to}`);
 }
