@@ -1,15 +1,16 @@
+// prisma/schema.prisma
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL") // optional but good for prisma
 }
 
 generator client {
   provider = "prisma-client-js"
 }
 
-enum Role {
-  USER
+enum UserType {
+  NORMAL
   ADMIN
 }
 
@@ -19,49 +20,60 @@ enum Plan {
 }
 
 model User {
-  id              String      @id @default(uuid())
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-  name            String
-  email           String      @unique
-  username        String      @unique
-  description     String?
-  avatar          String?
-  socialLinks     Json
-  isProfilePublic Boolean     @default(true)
-  role            Role        @default(USER)
-  plan            Plan        @default(FREE)
-  followersCount  Int         @default(0)
-  stackItems      StackItem[]
+  id               String   @id @default(uuid()) @db.Uuid // will match auth.users.id
+  email            String   @unique
+  username         String   @unique
+  name             String?
+  descriptionShort String?  @map("description_short")
+  avatarUrl        String?  @map("avatar_url")
+  socialLinks      Json?    @map("social_links") // e.g. [{platform:"x", url:"..."}, ...]
+  isProfilePublic  Boolean  @default(true) @map("is_profile_public")
+  followers        Int      @default(0)
+  type             UserType @default(NORMAL)
+  plan             Plan     @default(FREE)
 
-  Item Item[]
+  // Relations
+  stackItems UserStackItem[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@index([username])
 }
 
 model Item {
-  id         String      @id @default(uuid())
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
-  title      String
-  link       String
-  image      String?
-  category   String?
-  ownerId    String?     
-  owner      User?       @relation(fields: [ownerId], references: [id])
-  stackItems StackItem[]
+  id            String          @id @default(uuid()) @db.Uuid
+  title         String
+  url           String
+  imageUrl      String?         @map("image_url")
+  category      String
+  createdBy     String?         @map("created_by") @db.Uuid // optional (admin user id)
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @default(now()) @updatedAt @map("updated_at")
+  UserStackItem UserStackItem[]
+
+  // helpful uniqueness if you want to avoid exact duplicates:
+  @@unique([title, url, category])
+  @@index([category])
 }
 
-model StackItem {
-  id        String   @id @default(uuid())
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  user      User     @relation(fields: [userId], references: [id])
-  userId    String
-  item      Item     @relation(fields: [itemId], references: [id])
-  itemId    String
-  title     String
-  link      String
-  image     String?
-  category  String?
-  position  Int
-  @@unique([userId, itemId])
+model UserStackItem {
+  id           String  @id @default(uuid()) @db.Uuid
+  userId       String  @db.Uuid
+  originItemId String? @map("origin_item_id") @db.Uuid // nullable so relation must be optional
+  title        String
+  url          String
+  imageUrl     String? @map("image_url")
+  category     String
+  position     Int
+
+  user   User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  origin Item? @relation(fields: [originItemId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([userId, position])
+  @@index([userId])
+  @@index([originItemId])
 }
