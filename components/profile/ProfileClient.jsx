@@ -5,9 +5,116 @@ import { useRouter } from "next/navigation";
 import UploadButton from "@/components/common/UploadButton";
 import { Pencil, Check, GripVertical, Plus, Trash2, X } from "lucide-react";
 
+/* ===== brand styles ===== */
 const BRAND_BORDER = "border-green-500/20";
-const BRAND_HOVER = "hover:shadow-green-500/20";
+const BRAND_HOVER = "hover:shadow-green-500/5";
 
+/* ===== tiny toast system (local, no deps) ===== */
+function useToastsController() {
+  const [toasts, setToasts] = useState([]);
+  const push = (t) => {
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    setToasts((prev) => [...prev, { id, state: "info", timeout: 0, ...t }]);
+    return id;
+  };
+  const update = (id, patch) =>
+    setToasts((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, ...patch } : t))
+    );
+  const dismiss = (id) => setToasts((prev) => prev.filter((t) => t.id !== id));
+
+  const loading = (message = "Working…") =>
+    push({ state: "loading", message, persist: true });
+
+  const succeed = (id, message = "Done", ms = 1200) => {
+    update(id, { state: "success", message, persist: false });
+    setTimeout(() => dismiss(id), ms);
+  };
+  const fail = (id, message = "Something went wrong", ms = 2600) => {
+    update(id, { state: "error", message, persist: false });
+    setTimeout(() => dismiss(id), ms);
+  };
+
+  const withToast = async (
+    fn,
+    { loading: lm, success: sm, error: em } = {}
+  ) => {
+    const id = loading(lm || "Saving…");
+    try {
+      const res = await fn();
+      succeed(id, sm || "Saved");
+      return res;
+    } catch (err) {
+      fail(id, em || err?.message || "Failed");
+      throw err;
+    }
+  };
+
+  return { toasts, push, update, dismiss, loading, succeed, fail, withToast };
+}
+
+function Toaster({ toasts, onDismiss }) {
+  return (
+    <div className="pointer-events-none fixed bottom-4 right-4 z-[100] flex w-[320px] max-w-[calc(100vw-2rem)] flex-col gap-2">
+      {toasts.map((t) => (
+        <div
+          key={t.id}
+          className={`pointer-events-auto flex items-center gap-3 rounded-2xl border ${BRAND_BORDER} bg-white/70 p-3 text-sm shadow-xl backdrop-blur-xl transition-all dark:bg-white/10 ${
+            t.state === "success"
+              ? "border-green-500/30"
+              : t.state === "error"
+              ? "border-red-500/30"
+              : "border-white/15"
+          }`}
+        >
+          {/* icon */}
+          {t.state === "loading" ? (
+            <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white dark:border-white/30 dark:border-t-white" />
+          ) : t.state === "success" ? (
+            <svg
+              className="h-5 w-5 text-green-500"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path
+                fillRule="evenodd"
+                d="M16.707 5.293a1 1 0 010 1.414l-7.25 7.25a1 1 0 01-1.414 0l-3-3A1 1 0 116.293 9.293L8.5 11.5l6.543-6.543a1 1 0 011.414 0z"
+                clipRule="evenodd"
+              />
+            </svg>
+          ) : t.state === "error" ? (
+            <svg
+              className="h-5 w-5 text-red-500"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path
+                fillRule="evenodd"
+                d="M10 18a8 8 0 100-16 8 8 0 000 16zm-1-5h2v2H9v-2zm0-8h2v6H9V5z"
+                clipRule="evenodd"
+              />
+            </svg>
+          ) : null}
+
+          <div className="min-w-0 flex-1 text-gray-900 dark:text-gray-100">
+            <p className="truncate">{t.message}</p>
+          </div>
+
+          {!t.persist && (
+            <button
+              className="rounded-md px-2 py-1 text-xs text-gray-600 hover:bg-black/5 dark:text-gray-300 dark:hover:bg-white/10"
+              onClick={() => onDismiss(t.id)}
+            >
+              Close
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ===== helpers ===== */
 const safeHost = (url) => {
   try {
     return new URL(url.startsWith("http") ? url : `https://${url}`).hostname;
@@ -42,77 +149,115 @@ export default function ProfileClient({
   const [usernameErr, setUsernameErr] = useState("");
   const originalUsernameRef = useRef(initialProfile.username);
 
-  // ---------- API helpers ----------
+  // toasts
+  const toast = useToastsController();
+
+  /* ---------- API helpers (with toasts) ---------- */
   const saveProfile = async (patch) => {
+    const id = toast.loading("Saving…");
     const current = originalUsernameRef.current;
-    const res = await fetch(`/api/users/${encodeURIComponent(current)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
-    });
-    if (res.ok) {
+
+    try {
+      const res = await fetch(`/api/users/${encodeURIComponent(current)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+
+      if (!res.ok) {
+        const msg = await res.text();
+        toast.fail(id, msg || "Failed to save");
+        return { ok: false, status: res.status, msg };
+      }
+
       const { user } = await res.json();
       setProfile(user);
+
       if (patch.username && patch.username !== current) {
         originalUsernameRef.current = user.username;
         router.replace(`/${user.username}`);
       } else {
         router.refresh();
       }
+
+      toast.succeed(id, "Saved");
       return { ok: true };
-    } else {
-      return { ok: false, status: res.status, msg: await res.text() };
+    } catch (e) {
+      toast.fail(id, e?.message || "Failed to save");
+      return { ok: false, msg: e?.message || "error" };
     }
   };
 
-  const addFromOrigin = async (originItemId) => {
-    const res = await fetch("/api/stack", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ originItemId }),
-    });
-    if (!res.ok) return alert(await res.text());
-    const { item } = await res.json();
-    setStack((p) => [...p, item].sort((a, b) => a.position - b.position));
-    closeAddModal();
-  };
+  const addFromOrigin = async (originItemId) =>
+    toast.withToast(
+      async () => {
+        const res = await fetch("/api/stack", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ originItemId }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const { item } = await res.json();
+        setStack((p) => [...p, item].sort((a, b) => a.position - b.position));
+        closeAddModal();
+      },
+      { loading: "Adding…", success: "Item added" }
+    );
 
   const addCustom = async (payload) => {
     if (!payload.title || !payload.url || !payload.category) {
-      return alert("Title, URL and Category are required");
+      toast.fail(
+        toast.loading("Validating…"),
+        "Title, URL and Category are required"
+      );
+      return;
     }
-    const res = await fetch("/api/stack", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) return alert(await res.text());
-    const { item } = await res.json();
-    setStack((p) => [...p, item].sort((a, b) => a.position - b.position));
-    closeAddModal();
+    return toast.withToast(
+      async () => {
+        const res = await fetch("/api/stack", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const { item } = await res.json();
+        setStack((p) => [...p, item].sort((a, b) => a.position - b.position));
+        closeAddModal();
+      },
+      { loading: "Creating…", success: "Item created" }
+    );
   };
 
-  const updateItem = async (id, patch) => {
-    const res = await fetch(`/api/stack/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
-    });
-    if (!res.ok) return alert(await res.text());
-    const { item } = await res.json();
-    setStack((p) => p.map((i) => (i.id === id ? item : i)));
-  };
+  const updateItem = async (id, patch) =>
+    toast.withToast(
+      async () => {
+        const res = await fetch(`/api/stack/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const { item } = await res.json();
+        setStack((p) => p.map((i) => (i.id === id ? item : i)));
+      },
+      { loading: "Saving…", success: "Saved" }
+    );
 
   const deleteItem = async (id) => {
     if (!confirm("Delete this item?")) return;
-    const res = await fetch(`/api/stack/${id}`, { method: "DELETE" });
-    if (!res.ok) return alert(await res.text());
-    setStack((p) =>
-      p
-        .filter((i) => i.id !== id)
-        .map((i, idx) => ({ ...i, position: idx + 1 }))
+    return toast.withToast(
+      async () => {
+        const res = await fetch(`/api/stack/${id}`, { method: "DELETE" });
+        if (!res.ok) throw new Error(await res.text());
+        setStack((p) =>
+          p
+            .filter((i) => i.id !== id)
+            .map((i, idx) => ({ ...i, position: idx + 1 }))
+        );
+        await persistOrder(true);
+      },
+      { loading: "Deleting…", success: "Deleted" }
     );
-    await persistOrder();
   };
 
   // ---------- reorder ----------
@@ -121,22 +266,28 @@ export default function ProfileClient({
   const onDragOver = (e, overId, groupIds) => {
     e.preventDefault();
     if (!dragId || dragId === overId) return;
-    // only reorder within this group
     if (!groupIds.includes(dragId) || !groupIds.includes(overId)) return;
     const next = [...stack];
     const ai = next.findIndex((i) => i.id === dragId);
     const bi = next.findIndex((i) => i.id === overId);
     const [moved] = next.splice(ai, 1);
     next.splice(bi, 0, moved);
-    // re-number globally (keeps uniqueness)
     setStack(next.map((i, idx) => ({ ...i, position: idx + 1 })));
   };
-  const persistOrder = async () => {
-    const ids = stack.map((i) => i.id);
-    await fetch("/api/stack/reorder", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids }),
+  const persistOrder = async (silent = false) => {
+    const fn = async () => {
+      const ids = stack.map((i) => i.id);
+      const res = await fetch("/api/stack/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+    };
+    if (silent) return fn();
+    return toast.withToast(fn, {
+      loading: "Saving order…",
+      success: "Order updated",
     });
   };
 
@@ -181,7 +332,6 @@ export default function ProfileClient({
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(it);
     }
-    // stable sort categories alphabetically (you can customize)
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
   }, [stack]);
 
@@ -291,7 +441,7 @@ export default function ProfileClient({
             <button
               className={`mt-6 inline-flex items-center justify-center rounded-xl border ${BRAND_BORDER} bg-white/70 dark:bg-white/5 px-4 py-2 text-sm font-semibold backdrop-blur hover:bg-white/80 dark:hover:bg-white/10 transition ${BRAND_HOVER}`}
               onClick={async () => {
-                if (edit) await persistOrder();
+                if (edit) await persistOrder(); // with toast inside
                 setEdit((v) => !v);
               }}
               title={edit ? "Done" : "Edit profile"}
@@ -313,260 +463,265 @@ export default function ProfileClient({
   );
 
   return (
-    <div className="lg:grid lg:grid-cols-[320px,1fr] lg:gap-10">
-      {LeftPanel}
+    <>
+      <div className="lg:grid lg:grid-cols-[320px_1fr] lg:gap-10">
+        {LeftPanel}
 
-      {/* Right column: its own scroll, grouped by category */}
-      <main className="mt-6 lg:mt-0 lg:max-h-[calc(100vh-120px)] lg:overflow-y-auto pr-1">
-        <div className="space-y-8">
-          {isOwner && edit && (
-            <div className="flex justify-end">
-              <button
-                className={`inline-flex items-center gap-2 rounded-xl border ${BRAND_BORDER} bg-white/70 dark:bg-white/5 px-4 py-2 text-sm font-semibold backdrop-blur hover:bg-white/80 dark:hover:bg-white/10 transition ${BRAND_HOVER}`}
-                onClick={() => setShowAdd(true)}
-              >
-                <Plus size={16} /> Add Item
-              </button>
-            </div>
-          )}
+        {/* Right column: its own scroll, grouped by category */}
+        <main className="mt-6 lg:mt-0 lg:max-h-[calc(100vh-120px)] lg:overflow-y-auto pr-1">
+          <div className="space-y-8">
+            {isOwner && edit && (
+              <div className="flex justify-end">
+                <button
+                  className={`inline-flex items-center gap-2 rounded-xl border ${BRAND_BORDER} bg-white/70 dark:bg-white/5 px-4 py-2 text-sm font-semibold backdrop-blur hover:bg-white/80 dark:hover:bg-white/10 transition ${BRAND_HOVER}`}
+                  onClick={() => setShowAdd(true)}
+                >
+                  <Plus size={16} /> Add Item
+                </button>
+              </div>
+            )}
 
-          {grouped.map(([category, items]) => (
-            <section key={category} className="space-y-3">
-              <h2 className="text-sm font-semibold tracking-wide text-gray-700 dark:text-gray-300">
-                {category}
-              </h2>
+            {grouped.map(([category, items]) => (
+              <section key={category} className="space-y-3">
+                <h2 className="text-sm font-semibold tracking-wide text-gray-700 dark:text-gray-300">
+                  {category}
+                </h2>
 
-              <ul className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                {items.map((it) => (
-                  <li
-                    key={it.id}
-                    className={`rounded-2xl border ${BRAND_BORDER} bg-white/60 dark:bg-white/5 p-4 backdrop-blur-xl shadow-lg hover:shadow-xl transition ${BRAND_HOVER}`}
-                    draggable={isOwner && edit}
-                    onDragStart={() => onDragStart(it.id)}
-                    onDragOver={(e) =>
-                      onDragOver(
-                        e,
-                        it.id,
-                        items.map((x) => x.id)
-                      )
-                    }
-                  >
-                    <div className="flex gap-3">
-                      {isOwner && edit && (
-                        <GripVertical
-                          className="mt-1 shrink-0 text-gray-400"
-                          size={16}
-                        />
-                      )}
-
-                      {it.imageUrl ? (
-                        <img
-                          src={it.imageUrl}
-                          className="size-12 rounded-lg object-cover"
-                          alt=""
-                        />
-                      ) : (
-                        <Favicon url={it.url} />
-                      )}
-
-                      <div className="min-w-0 flex-1">
-                        {edit ? (
-                          <input
-                            className="w-full rounded-md border border-white/10 bg-white/60 dark:bg-white/5 px-2 py-1 text-sm font-medium outline-none focus:ring-2 focus:ring-green-500/40"
-                            defaultValue={it.title}
-                            onBlur={(e) =>
-                              updateItem(it.id, { title: e.target.value })
-                            }
-                          />
-                        ) : (
-                          <a
-                            href={it.url}
-                            target="_blank"
-                            className="truncate font-medium hover:underline"
-                          >
-                            {it.title}
-                          </a>
-                        )}
-
-                        {edit ? (
-                          <input
-                            className="mt-1 w-full rounded-md border border-white/10 bg-white/60 dark:bg-white/5 px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-green-500/40"
-                            defaultValue={it.url}
-                            onBlur={(e) =>
-                              updateItem(it.id, { url: e.target.value })
-                            }
-                          />
-                        ) : (
-                          <p className="truncate text-xs text-gray-600 dark:text-gray-400">
-                            {safeHost(it.url)}
-                          </p>
-                        )}
-
-                        <div className="mt-3 flex flex-wrap items-center gap-2">
-                          <span className="inline-flex items-center rounded-full border border-white/15 bg-white/50 px-2 py-0.5 text-[11px] text-gray-700 dark:bg-white/10 dark:text-gray-300">
-                            {it.category || "—"}
-                          </span>
-
-                          {edit && (
-                            <>
-                              <UploadButton
-                                folder="stack-images"
-                                onUploaded={(url) =>
-                                  updateItem(it.id, { imageUrl: url })
-                                }
-                              >
-                                Image
-                              </UploadButton>
-                              <input
-                                className="w-36 rounded-md border border-white/10 bg-white/60 dark:bg-white/5 px-2 py-1 text-[11px] outline-none focus:ring-2 focus:ring-green-500/40"
-                                placeholder="Category"
-                                defaultValue={it.category}
-                                onBlur={(e) =>
-                                  updateItem(it.id, {
-                                    category: e.target.value,
-                                  })
-                                }
-                              />
-                            </>
-                          )}
-                        </div>
-                      </div>
-
-                      {isOwner && edit && (
-                        <button
-                          className="ml-2 h-8 rounded-md border border-white/10 bg-white/60 px-2 text-xs text-red-600 dark:bg-white/5"
-                          onClick={() => deleteItem(it.id)}
-                          title="Delete"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      )}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ))}
-        </div>
-      </main>
-
-      {/* Add Item Modal */}
-      {isOwner && edit && showAdd && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-          <div
-            className={`w-full max-w-xl rounded-2xl border ${BRAND_BORDER} bg-[#0b0f0c] text-white shadow-2xl`}
-          >
-            <div className="flex items-center justify-between p-4">
-              <h3 className="text-lg font-semibold">Add Item</h3>
-              <button
-                className="rounded-lg p-2 text-gray-300 hover:bg-white/5"
-                onClick={closeAddModal}
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="space-y-4 p-4 pt-0">
-              <input
-                autoFocus
-                className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none placeholder:text-gray-400"
-                placeholder="Search existing items (VS Code, GitHub...)"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-
-              {searchResults.length > 0 && (
-                <ul className="max-h-48 divide-y divide-white/10 overflow-auto rounded-lg border border-white/10">
-                  {searchResults.map((it) => (
+                <ul className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  {items.map((it) => (
                     <li
                       key={it.id}
-                      className="flex items-center justify-between p-2"
+                      className={`rounded-2xl border ${BRAND_BORDER} bg-white/60 dark:bg-white/5 p-4 backdrop-blur-xl shadow-lg hover:shadow-xl transition ${BRAND_HOVER}`}
+                      draggable={isOwner && edit}
+                      onDragStart={() => onDragStart(it.id)}
+                      onDragOver={(e) =>
+                        onDragOver(
+                          e,
+                          it.id,
+                          items.map((x) => x.id)
+                        )
+                      }
                     >
-                      <div className="min-w-0">
-                        <p className="truncate font-medium">{it.title}</p>
-                        <p className="truncate text-xs text-gray-400">
-                          {it.category} • {it.url}
-                        </p>
+                      <div className="flex gap-3">
+                        {isOwner && edit && (
+                          <GripVertical
+                            className="mt-1 shrink-0 text-gray-400"
+                            size={16}
+                          />
+                        )}
+
+                        {it.imageUrl ? (
+                          <img
+                            src={it.imageUrl}
+                            className="size-12 rounded-lg object-cover"
+                            alt=""
+                          />
+                        ) : (
+                          <Favicon url={it.url} />
+                        )}
+
+                        <div className="min-w-0 flex-1">
+                          {edit ? (
+                            <input
+                              className="w-full rounded-md border border-white/10 bg-white/60 dark:bg-white/5 px-2 py-1 text-sm font-medium outline-none focus:ring-2 focus:ring-green-500/40"
+                              defaultValue={it.title}
+                              onBlur={(e) =>
+                                updateItem(it.id, { title: e.target.value })
+                              }
+                            />
+                          ) : (
+                            <a
+                              href={it.url}
+                              target="_blank"
+                              className="truncate font-medium hover:underline"
+                            >
+                              {it.title}
+                            </a>
+                          )}
+
+                          {edit ? (
+                            <input
+                              className="mt-1 w-full rounded-md border border-white/10 bg-white/60 dark:bg-white/5 px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-green-500/40"
+                              defaultValue={it.url}
+                              onBlur={(e) =>
+                                updateItem(it.id, { url: e.target.value })
+                              }
+                            />
+                          ) : (
+                            <p className="truncate text-xs text-gray-600 dark:text-gray-400">
+                              {safeHost(it.url)}
+                            </p>
+                          )}
+
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            <span className="inline-flex items-center rounded-full border border-white/15 bg-white/50 px-2 py-0.5 text-[11px] text-gray-700 dark:bg-white/10 dark:text-gray-300">
+                              {it.category || "—"}
+                            </span>
+
+                            {edit && (
+                              <>
+                                <UploadButton
+                                  folder="stack-images"
+                                  onUploaded={(url) =>
+                                    updateItem(it.id, { imageUrl: url })
+                                  }
+                                >
+                                  Image
+                                </UploadButton>
+                                <input
+                                  className="w-36 rounded-md border border-white/10 bg-white/60 dark:bg-white/5 px-2 py-1 text-[11px] outline-none focus:ring-2 focus:ring-green-500/40"
+                                  placeholder="Category"
+                                  defaultValue={it.category}
+                                  onBlur={(e) =>
+                                    updateItem(it.id, {
+                                      category: e.target.value,
+                                    })
+                                  }
+                                />
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        {isOwner && edit && (
+                          <button
+                            className="ml-2 h-8 rounded-md border border-white/10 bg-white/60 px-2 text-xs text-red-600 dark:bg-white/5"
+                            onClick={() => deleteItem(it.id)}
+                            title="Delete"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
                       </div>
-                      <button
-                        className="rounded-md border border-white/10 bg-white/10 px-3 py-1 text-xs hover:bg-white/15"
-                        onClick={() => addFromOrigin(it.id)}
-                      >
-                        Add
-                      </button>
                     </li>
                   ))}
                 </ul>
-              )}
+              </section>
+            ))}
+          </div>
+        </main>
 
-              <div className="rounded-xl border border-white/10 p-3">
-                <p className="mb-2 text-sm font-medium text-gray-200">
-                  Or create a custom item
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  <input
-                    className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none"
-                    placeholder="Title"
-                    value={customDraft.title}
-                    onChange={(e) =>
-                      setCustomDraft((s) => ({ ...s, title: e.target.value }))
-                    }
-                  />
-                  <input
-                    className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none"
-                    placeholder="Category"
-                    value={customDraft.category}
-                    onChange={(e) =>
-                      setCustomDraft((s) => ({
-                        ...s,
-                        category: e.target.value,
-                      }))
-                    }
-                  />
-                  <input
-                    className="col-span-2 rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none"
-                    placeholder="URL"
-                    value={customDraft.url}
-                    onChange={(e) =>
-                      setCustomDraft((s) => ({ ...s, url: e.target.value }))
-                    }
-                  />
-                  <div className="col-span-2 flex items-center gap-2">
+        {/* Add Item Modal */}
+        {isOwner && edit && showAdd && (
+          <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
+            <div
+              className={`w-full max-w-xl rounded-2xl border ${BRAND_BORDER} bg-[#0b0f0c] text-white shadow-2xl`}
+            >
+              <div className="flex items-center justify-between p-4">
+                <h3 className="text-lg font-semibold">Add Item</h3>
+                <button
+                  className="rounded-lg p-2 text-gray-300 hover:bg-white/5"
+                  onClick={closeAddModal}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="space-y-4 p-4 pt-0">
+                <input
+                  autoFocus
+                  className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none placeholder:text-gray-400"
+                  placeholder="Search existing items (VS Code, GitHub...)"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+
+                {searchResults.length > 0 && (
+                  <ul className="max-h-48 divide-y divide-white/10 overflow-auto rounded-lg border border-white/10">
+                    {searchResults.map((it) => (
+                      <li
+                        key={it.id}
+                        className="flex items-center justify-between p-2"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate font-medium">{it.title}</p>
+                          <p className="truncate text-xs text-gray-400">
+                            {it.category} • {it.url}
+                          </p>
+                        </div>
+                        <button
+                          className="rounded-md border border-white/10 bg-white/10 px-3 py-1 text-xs hover:bg-white/15"
+                          onClick={() => addFromOrigin(it.id)}
+                        >
+                          Add
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                <div className="rounded-xl border border-white/10 p-3">
+                  <p className="mb-2 text-sm font-medium text-gray-200">
+                    Or create a custom item
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
                     <input
-                      className="flex-1 rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none"
-                      placeholder="Image URL (optional)"
-                      value={customDraft.imageUrl}
+                      className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none"
+                      placeholder="Title"
+                      value={customDraft.title}
+                      onChange={(e) =>
+                        setCustomDraft((s) => ({ ...s, title: e.target.value }))
+                      }
+                    />
+                    <input
+                      className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none"
+                      placeholder="Category"
+                      value={customDraft.category}
                       onChange={(e) =>
                         setCustomDraft((s) => ({
                           ...s,
-                          imageUrl: e.target.value,
+                          category: e.target.value,
                         }))
                       }
                     />
-                    <UploadButton
-                      folder="stack-images"
-                      onUploaded={(url) =>
-                        setCustomDraft((s) => ({ ...s, imageUrl: url }))
+                    <input
+                      className="col-span-2 rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none"
+                      placeholder="URL"
+                      value={customDraft.url}
+                      onChange={(e) =>
+                        setCustomDraft((s) => ({ ...s, url: e.target.value }))
                       }
-                    >
-                      Upload
-                    </UploadButton>
+                    />
+                    <div className="col-span-2 flex items-center gap-2">
+                      <input
+                        className="flex-1 rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none"
+                        placeholder="Image URL (optional)"
+                        value={customDraft.imageUrl}
+                        onChange={(e) =>
+                          setCustomDraft((s) => ({
+                            ...s,
+                            imageUrl: e.target.value,
+                          }))
+                        }
+                      />
+                      <UploadButton
+                        folder="stack-images"
+                        onUploaded={(url) =>
+                          setCustomDraft((s) => ({ ...s, imageUrl: url }))
+                        }
+                      >
+                        Upload
+                      </UploadButton>
+                    </div>
                   </div>
-                </div>
-                <div className="mt-3 flex justify-end">
-                  <button
-                    className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700"
-                    onClick={() => addCustom(customDraft)}
-                  >
-                    Create
-                  </button>
+                  <div className="mt-3 flex justify-end">
+                    <button
+                      className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700"
+                      onClick={() => addCustom(customDraft)}
+                    >
+                      Create
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+
+      {/* bottom-right toasts */}
+      <Toaster toasts={toast.toasts} onDismiss={toast.dismiss} />
+    </>
   );
 }
 
@@ -597,24 +752,41 @@ function SocialView({ social }) {
 }
 
 function SocialEditor({ social, onChange }) {
-  const [rows, setRows] = useState(social || []);
+  const [rows, setRows] = useState(social ?? []);
+  const [dirty, setDirty] = useState(false);
+
   useEffect(() => {
-    setRows(social || []);
-  }, [social]);
-  const set = (idx, key, val) => {
-    const next = rows.map((r, i) => (i === idx ? { ...r, [key]: val } : r));
-    setRows(next);
-    onChange(next);
+    if (!dirty) setRows(social ?? []);
+  }, [social, dirty]);
+
+  const update = (idx, key, val) => {
+    setRows((prev) =>
+      prev.map((r, i) => (i === idx ? { ...r, [key]: val } : r))
+    );
+    setDirty(true);
   };
+
   const add = () => {
-    const next = [...rows, { platform: "", url: "" }];
-    setRows(next);
-    onChange(next);
+    setRows((prev) => [...prev, { platform: "", url: "" }]);
+    setDirty(true);
   };
+
   const del = (idx) => {
     const next = rows.filter((_, i) => i !== idx);
     setRows(next);
-    onChange(next);
+    setDirty(true);
+  };
+
+  const save = () => {
+    onChange?.(rows);
+    setDirty(false);
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      save();
+    }
   };
 
   return (
@@ -625,13 +797,15 @@ function SocialEditor({ social, onChange }) {
             className="w-32 rounded-md border border-white/10 bg-white/60 px-2 py-1 text-xs outline-none dark:bg-white/5"
             placeholder="Platform"
             value={r.platform || ""}
-            onChange={(e) => set(i, "platform", e.target.value)}
+            onChange={(e) => update(i, "platform", e.target.value)}
+            onKeyDown={onKeyDown}
           />
           <input
             className="flex-1 rounded-md border border-white/10 bg-white/60 px-2 py-1 text-xs outline-none dark:bg-white/5"
             placeholder="URL"
             value={r.url || ""}
-            onChange={(e) => set(i, "url", e.target.value)}
+            onChange={(e) => update(i, "url", e.target.value)}
+            onKeyDown={onKeyDown}
           />
           <button
             className="rounded-md border border-white/10 bg-white/60 px-2 py-1 text-xs text-red-600 dark:bg-white/5"
@@ -641,12 +815,23 @@ function SocialEditor({ social, onChange }) {
           </button>
         </div>
       ))}
-      <button
-        className="rounded-md border border-white/10 bg-white/60 px-3 py-1 text-xs hover:bg-white/70 dark:bg-white/5 dark:hover:bg-white/10"
-        onClick={add}
-      >
-        Add link
-      </button>
+
+      <div className="flex items-center gap-2 pt-1">
+        <button
+          className="rounded-md border border-white/10 bg-white/60 px-3 py-1 text-xs hover:bg-white/70 disabled:opacity-60 dark:bg-white/5 dark:hover:bg-white/10"
+          onClick={add}
+        >
+          Add link
+        </button>
+        <button
+          className="ml-auto rounded-md bg-green-600 px-3 py-1 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-60"
+          onClick={save}
+          disabled={!dirty}
+          title={dirty ? "Save changes" : "No changes"}
+        >
+          Save links
+        </button>
+      </div>
     </div>
   );
 }

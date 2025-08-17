@@ -78,10 +78,7 @@ export default function Header() {
   const profileHref =
     session.loggedIn && session.username ? `/${session.username}` : "/profiles";
 
-  const navLinks = [
-    { name: "Blog", href: "#" },
-    { name: "Profile", href: profileHref },
-  ];
+  const navLinks = [{ name: "Profiles", href: "/profiles" }];
 
   return (
     <div className="sticky top-0 z-50 backdrop-blur-3xl">

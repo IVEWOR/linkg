@@ -16,31 +16,46 @@ export default function UploadButton({
     if (!file) return;
     setBusy(true);
 
-    const sig = await fetch("/api/upload/sign", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ folder }),
-    }).then((r) => r.json());
-
-    const fd = new FormData();
-    fd.append("file", file);
-    fd.append("api_key", sig.apiKey);
-    fd.append("timestamp", sig.timestamp);
-    fd.append("upload_preset", sig.uploadPreset);
-    fd.append("signature", sig.signature);
-    if (folder) fd.append("folder", folder);
-
-    const res = await fetch(
-      `https://api.cloudinary.com/v1_1/${sig.cloudName}/image/upload`,
-      {
+    try {
+      const sig = await fetch("/api/upload/sign", {
         method: "POST",
-        body: fd,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder }),
+      }).then((r) => r.json());
+
+      if (!sig?.ok) {
+        setBusy(false);
+        return alert(`Sign error: ${sig?.error || "unknown"}`);
       }
-    );
-    const json = await res.json();
-    setBusy(false);
-    if (json.secure_url) onUploaded?.(json.secure_url, json);
-    else alert("Upload failed");
+
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("api_key", sig.apiKey);
+      fd.append("timestamp", String(sig.timestamp));
+      fd.append("upload_preset", sig.uploadPreset);
+      fd.append("signature", sig.signature);
+      if (sig.signedParams?.folder)
+        fd.append("folder", sig.signedParams.folder);
+
+      const res = await fetch(
+        `https://api.cloudinary.com/v1_1/${sig.cloudName}/image/upload`,
+        { method: "POST", body: fd }
+      );
+      const json = await res.json();
+
+      if (!res.ok) {
+        console.error("Cloudinary error:", json);
+        setBusy(false);
+        return alert(json?.error?.message || "Upload failed (Cloudinary 400)");
+      }
+
+      setBusy(false);
+      onUploaded?.(json.secure_url, json);
+    } catch (err) {
+      console.error(err);
+      setBusy(false);
+      alert("Upload failed (network)");
+    }
   };
 
   return (
